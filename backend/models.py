@@ -84,6 +84,11 @@ class PptxRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    device_token: Optional[str] = None
+
+
+class SetExpiry(BaseModel):
+    expires_at: Optional[str] = None  # YYYY-MM-DD 或 None（永不到期）
 
 
 class UserCreate(BaseModel):

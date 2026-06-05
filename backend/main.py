@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
-from models import AnalysisRequest, PptxRequest, LoginRequest, UserCreate, ExtractRequest, ProductCreate
+from models import AnalysisRequest, PptxRequest, LoginRequest, UserCreate, ExtractRequest, ProductCreate, SetExpiry
 
 _anthropic = anthropic.Anthropic()
 from analyzer import analyze_coverage
@@ -63,21 +63,39 @@ def health():
 
 @app.post("/auth/login")
 def login(req: LoginRequest):
+    import secrets
+    from datetime import date
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, username, password_hash, display_name, is_active, is_admin FROM users WHERE username=?",
+            "SELECT id, username, password_hash, display_name, is_active, is_admin, expires_at, device_token FROM users WHERE username=?",
             (req.username,)
         ).fetchone()
     if not row or not verify_password(req.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
     if not row["is_active"]:
         raise HTTPException(status_code=403, detail="帳號已停用，請聯絡管理員")
+    if row["expires_at"] and row["expires_at"] < date.today().isoformat():
+        raise HTTPException(status_code=403, detail="帳號已到期，請聯絡管理員續費")
+
+    # 裝置鎖定
+    db_token = row["device_token"]
+    if db_token:
+        if req.device_token != db_token:
+            raise HTTPException(status_code=403, detail="此帳號已綁定其他裝置，如需更換請聯絡管理員")
+        new_device_token = db_token
+    else:
+        new_device_token = req.device_token or secrets.token_hex(32)
+        with get_db() as conn:
+            conn.execute("UPDATE users SET device_token=? WHERE id=?", (new_device_token, row["id"]))
+            conn.commit()
+
     token = create_token(row["id"], row["username"], bool(row["is_admin"]))
     return {
         "token": token,
         "username": row["username"],
         "display_name": row["display_name"],
         "is_admin": bool(row["is_admin"]),
+        "device_token": new_device_token,
     }
 
 
@@ -86,7 +104,9 @@ def admin_list_users(user: dict = Depends(get_admin_user)):
     with get_db() as conn:
         rows = conn.execute("""
             SELECT u.id, u.username, u.display_name, u.is_active, u.is_admin,
-                   u.created_at, COUNT(al.id) as analysis_count
+                   u.created_at, u.expires_at,
+                   (u.device_token IS NOT NULL) as has_device,
+                   COUNT(al.id) as analysis_count
             FROM users u
             LEFT JOIN analysis_logs al ON al.user_id = u.id
             GROUP BY u.id
@@ -110,6 +130,26 @@ def admin_create_user(req: UserCreate, user: dict = Depends(get_admin_user)):
             conn.commit()
         except Exception:
             raise HTTPException(status_code=400, detail="帳號名稱已存在")
+    return {"ok": True}
+
+
+@app.patch("/admin/users/{user_id}/expires")
+def admin_set_expires(user_id: int, req: SetExpiry, user: dict = Depends(get_admin_user)):
+    with get_db() as conn:
+        if not conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="找不到此帳號")
+        conn.execute("UPDATE users SET expires_at=? WHERE id=?", (req.expires_at, user_id))
+        conn.commit()
+    return {"expires_at": req.expires_at}
+
+
+@app.patch("/admin/users/{user_id}/reset-device")
+def admin_reset_device(user_id: int, user: dict = Depends(get_admin_user)):
+    with get_db() as conn:
+        if not conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="找不到此帳號")
+        conn.execute("UPDATE users SET device_token=NULL WHERE id=?", (user_id,))
+        conn.commit()
     return {"ok": True}
 
 

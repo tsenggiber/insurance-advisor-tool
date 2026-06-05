@@ -13,7 +13,11 @@ export default function LoginPage({ onLogin }) {
     setLoading(true)
     setError(null)
     try {
-      const res = await axios.post(`${API}/auth/login`, form)
+      const device_token = localStorage.getItem('deviceToken') || undefined
+      const res = await axios.post(`${API}/auth/login`, { ...form, device_token })
+      if (res.data.device_token) {
+        localStorage.setItem('deviceToken', res.data.device_token)
+      }
       onLogin(res.data)
     } catch (e) {
       setError(e.response?.data?.detail || '登入失敗，請確認後端已啟動')

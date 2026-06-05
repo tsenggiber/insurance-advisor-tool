@@ -9,6 +9,7 @@ export default function AdminPage({ onBack }) {
   const [form, setForm] = useState({ username: '', password: '', display_name: '', is_admin: false })
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [expiryEdit, setExpiryEdit] = useState(null) // { userId, value }
 
   const fetchUsers = async () => {
     try {
@@ -48,6 +49,28 @@ export default function AdminPage({ onBack }) {
       fetchUsers()
     } catch (e) {
       setError(e.response?.data?.detail || '操作失敗')
+    }
+  }
+
+  const handleSetExpiry = async (userId, value) => {
+    setError(null)
+    try {
+      await axios.patch(`${API}/admin/users/${userId}/expires`, { expires_at: value || null })
+      setExpiryEdit(null)
+      fetchUsers()
+    } catch (e) {
+      setError(e.response?.data?.detail || '設定失敗')
+    }
+  }
+
+  const handleResetDevice = async (userId) => {
+    if (!confirm('確定要重置此帳號的裝置綁定？下次登入將重新綁定新裝置。')) return
+    setError(null)
+    try {
+      await axios.patch(`${API}/admin/users/${userId}/reset-device`)
+      fetchUsers()
+    } catch (e) {
+      setError(e.response?.data?.detail || '重置失敗')
     }
   }
 
@@ -154,6 +177,8 @@ export default function AdminPage({ onBack }) {
                   <th className="text-left pb-2 font-medium">顯示名稱</th>
                   <th className="text-center pb-2 font-medium">身份</th>
                   <th className="text-center pb-2 font-medium">分析次數</th>
+                  <th className="text-center pb-2 font-medium">到期日</th>
+                  <th className="text-center pb-2 font-medium">裝置</th>
                   <th className="text-center pb-2 font-medium">狀態</th>
                   <th className="text-center pb-2 font-medium">操作</th>
                 </tr>
@@ -170,6 +195,37 @@ export default function AdminPage({ onBack }) {
                       }
                     </td>
                     <td className="py-3 text-center font-medium text-navy">{u.analysis_count}</td>
+                    <td className="py-3 text-center text-xs">
+                      {expiryEdit?.userId === u.id ? (
+                        <div className="flex items-center gap-1 justify-center">
+                          <input type="date" value={expiryEdit.value}
+                            onChange={e => setExpiryEdit(v => ({ ...v, value: e.target.value }))}
+                            className="border rounded px-1 py-0.5 text-xs" />
+                          <button onClick={() => handleSetExpiry(u.id, expiryEdit.value)}
+                            className="text-green-600 hover:text-green-800 font-bold">✓</button>
+                          <button onClick={() => setExpiryEdit(null)}
+                            className="text-gray-400 hover:text-gray-600">✕</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setExpiryEdit({ userId: u.id, value: u.expires_at || '' })}
+                          className={`px-2 py-0.5 rounded border text-xs transition hover:bg-gray-50 ${
+                            u.expires_at && u.expires_at < new Date().toISOString().slice(0,10)
+                              ? 'border-red-300 text-red-500'
+                              : 'border-gray-200 text-gray-500'
+                          }`}>
+                          {u.expires_at || '永久'}
+                        </button>
+                      )}
+                    </td>
+                    <td className="py-3 text-center">
+                      {u.has_device
+                        ? <button onClick={() => handleResetDevice(u.id)}
+                            className="text-xs px-2 py-0.5 rounded border border-orange-200 text-orange-500 hover:bg-orange-50 transition">
+                            重置
+                          </button>
+                        : <span className="text-xs text-gray-300">未綁定</span>
+                      }
+                    </td>
                     <td className="py-3 text-center">
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                         u.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'

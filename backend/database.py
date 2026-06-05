@@ -21,6 +21,8 @@ def init_db():
                 display_name TEXT NOT NULL DEFAULT '',
                 is_active INTEGER NOT NULL DEFAULT 1,
                 is_admin INTEGER NOT NULL DEFAULT 0,
+                expires_at TEXT,
+                device_token TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
             );
             CREATE TABLE IF NOT EXISTS analysis_logs (
@@ -42,6 +44,14 @@ def init_db():
                 UNIQUE(company, product_name)
             );
         """)
+        # 舊版升級：補欄位
+        for col, definition in [("expires_at", "TEXT"), ("device_token", "TEXT")]:
+            try:
+                conn.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+                conn.commit()
+            except Exception:
+                pass
+
         row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
         if row[0] == 0:
             from auth import hash_password
