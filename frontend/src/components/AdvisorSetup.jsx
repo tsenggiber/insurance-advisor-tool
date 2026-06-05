@@ -17,7 +17,19 @@ export default function AdvisorSetup({ current, onSave, onClose }) {
     const file = e.target.files[0]
     if (!file) return
     const reader = new FileReader()
-    reader.onload = (ev) => setForm(f => ({ ...f, photo_base64: ev.target.result }))
+    reader.onload = (ev) => {
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        const MAX = 200
+        const ratio = Math.min(MAX / img.width, MAX / img.height, 1)
+        canvas.width = img.width * ratio
+        canvas.height = img.height * ratio
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+        setForm(f => ({ ...f, photo_base64: canvas.toDataURL('image/jpeg', 0.8) }))
+      }
+      img.src = ev.target.result
+    }
     reader.readAsDataURL(file)
   }
 

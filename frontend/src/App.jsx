@@ -60,7 +60,12 @@ export default function App() {
   }
 
   const saveAdvisor = (info) => {
-    localStorage.setItem('advisorInfo', JSON.stringify(info))
+    try {
+      localStorage.setItem('advisorInfo', JSON.stringify(info))
+    } catch {
+      alert('儲存失敗：大頭照太大，請換一張較小的圖片')
+      return
+    }
     setAdvisor(info)
     setShowSetup(false)
   }
