@@ -27,6 +27,24 @@ export default function AdminPage({ onBack }) {
     } catch { /* 靜默 */ }
   }
 
+  const handleResolve = async (report) => {
+    const insuranceType = prompt(`「${report.product_name}」\n保險種類（醫療險/壽險/癌症險/傷害險/儲蓄險）：`, '醫療險')
+    if (!insuranceType) return
+    const premiumType = prompt('保費類型（自然保費/平準保費）：', '自然保費')
+    if (!premiumType) return
+    try {
+      await axios.post(`${API}/reports/${report.id}/resolve`, {
+        insurance_type: insuranceType,
+        premium_type: premiumType,
+        coverage_end_age: 75,
+      })
+      fetchReports()
+      alert(`已加入資料庫：${report.company}｜${report.product_name}`)
+    } catch (e) {
+      alert('處理失敗：' + (e.response?.data?.detail || '請重試'))
+    }
+  }
+
   const fetchUsers = async () => {
     try {
       const res = await axios.get(`${API}/admin/users`)
@@ -283,6 +301,7 @@ export default function AdminPage({ onBack }) {
                   <th className="text-left pb-2 font-medium">商品名稱</th>
                   <th className="text-left pb-2 font-medium">回報人</th>
                   <th className="text-center pb-2 font-medium">狀態</th>
+                  <th className="text-center pb-2 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -300,6 +319,16 @@ export default function AdminPage({ onBack }) {
                       }`}>
                         {r.status === 'pending' ? '待確認' : '已處理'}
                       </span>
+                    </td>
+                    <td className="py-2 text-center">
+                      {r.status === 'pending' && (
+                        <button
+                          onClick={() => handleResolve(r)}
+                          className="text-xs px-2 py-1 rounded border border-teal text-teal hover:bg-teal hover:text-white transition"
+                        >
+                          加入資料庫
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

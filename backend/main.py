@@ -17,7 +17,7 @@ _anthropic = anthropic.Anthropic()
 from analyzer import analyze_coverage
 from pptx_generator import generate_pptx
 from database import (get_db, init_db, lookup_product, insert_product, insert_report,
-                      log_api_usage, get_cost_summary,
+                      log_api_usage, get_cost_summary, sync_db_to_r2,
                       save_client_session, list_client_sessions, get_client_session, delete_client_session)
 from auth import verify_password, create_token, decode_token
 
@@ -569,6 +569,30 @@ def list_reports(user: dict = Depends(get_current_user)):
             "SELECT * FROM product_reports ORDER BY created_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.post("/reports/{report_id}/resolve")
+def resolve_report(report_id: int, body: dict, user: dict = Depends(get_current_user)):
+    """管理員確認回報：加入 products 資料表並標記為已處理。"""
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="無權限")
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM product_reports WHERE id=?", (report_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="找不到該回報")
+
+    insurance_type   = body.get("insurance_type", "醫療險")
+    premium_type     = body.get("premium_type", "自然保費")
+    coverage_end_age = int(body.get("coverage_end_age", 75))
+
+    insert_product(row["company"], row["product_name"], insurance_type,
+                   premium_type, coverage_end_age, user["username"])
+
+    with get_db() as conn:
+        conn.execute("UPDATE product_reports SET status='done' WHERE id=?", (report_id,))
+        conn.commit()
+    sync_db_to_r2()
+    return {"ok": True}
 
 
 @app.post("/client-sessions")
