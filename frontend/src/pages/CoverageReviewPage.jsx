@@ -279,6 +279,7 @@ function CoverageView({ policies, client, onEnriched }) {
   const [rateSources, setRateSources] = useState({})
   const [enrichedPolicies, setEnrichedPolicies] = useState(policies)
   const [enrichLoading, setEnrichLoading] = useState(false)
+  const [enrichDone, setEnrichDone] = useState(false)
   const [activeTab, setActiveTab] = useState('coverage') // 'coverage' | 'chart' | 'policies'
   // 區塊標記：key → 0(正常) 1(黃/注意) 2(紅/不足)
   const [highlights, setHighlights] = useState({})
@@ -293,19 +294,20 @@ function CoverageView({ policies, client, onEnriched }) {
     return base + ' cursor-pointer hover:ring-1 hover:ring-gray-300'
   }
 
-  // 自動讀取條款 PDF，提取正確保障細項
-  useEffect(() => {
+  const handleEnrich = () => {
+    if (enrichLoading || enrichDone) return
     setEnrichLoading(true)
     axios.post(`${API}/enrich-policies`, { policies })
       .then(res => {
         if (res.data.policies && res.data.policies.length > 0) {
           setEnrichedPolicies(res.data.policies)
           onEnriched?.(res.data.policies)
+          setEnrichDone(true)
         }
       })
       .catch(() => {})
       .finally(() => setEnrichLoading(false))
-  }, [policies])
+  }
 
   // 自動抓取自然保費附約的費率表
   useEffect(() => {
@@ -405,12 +407,22 @@ function CoverageView({ policies, client, onEnriched }) {
   return (
     <div className="space-y-3 select-none">
 
-      {/* ── 讀取條款中 indicator ── */}
-      {enrichLoading && (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 text-sm text-blue-600 flex items-center gap-2 animate-pulse">
-          <span className="animate-spin inline-block">⟳</span>
-          正在讀取條款 PDF，提取準確保障細項...
+      {/* ── 讀取條款按鈕 ── */}
+      {enrichDone ? (
+        <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-2 text-sm text-green-600 flex items-center gap-2">
+          ✓ 條款已讀取，保障細項已更新
         </div>
+      ) : (
+        <button
+          onClick={handleEnrich}
+          disabled={enrichLoading}
+          className="w-full bg-blue-50 border border-blue-200 rounded-xl px-4 py-2 text-sm text-blue-600 hover:bg-blue-100 transition flex items-center justify-center gap-2 disabled:opacity-70"
+        >
+          {enrichLoading
+            ? <><span className="animate-spin inline-block">⟳</span> 正在讀取條款 PDF，提取準確保障細項...</>
+            : <><span>📄</span> 讀取條款（提升精準度，每次分析約 NT$1–3）</>
+          }
+        </button>
       )}
 
       {/* ── 頁籤列 ── */}
