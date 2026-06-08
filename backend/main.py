@@ -257,6 +257,9 @@ def _enrich_one_policy(p: dict) -> dict:
             updated["accident_reimburse"] = amt
         elif ("實支" in name or "實支實付" in name):
             updated["medical_reimburse"] = amt
+        elif "住院費用" in name and "團體" not in name:
+            # 住院費用保險附約（含擇優型）= 實支實付型，amt 為計劃日額限額
+            updated["medical_reimburse"] = amt
         elif "日額" in name and ("意外" in name or "傷害" in name):
             updated["accident_hosp_daily"] = amt
         elif "失能扶助金" in name or "失能生活費" in name:
@@ -461,6 +464,7 @@ def extract_policies(req: ExtractRequest, user: dict = Depends(get_current_user)
                             "保費欄位：若圖中只有舊的保費數字，仍請填入；若看不到填0。\n"
                             "職業類別：傷害/意外險看到「第N類」請填 occupation_class=N。\n"
                             "計劃別：若保單名後有計劃別（如計劃一/二/三），請一併納入 product_name，如「新住院醫療保險附約計劃二」。\n"
+                            "住院費用保險附約：保額欄若顯示「計劃N：日額XXX元」，請將 XXX 填入 coverage_amount（這是每日實支上限）。\n"
                             "細部金額：依圖中記載盡量填入，看不到填0。\n"
                             "請用 output_policies 工具回傳所有找到的保單，找不到任何保單才回傳空陣列。"
                         )
