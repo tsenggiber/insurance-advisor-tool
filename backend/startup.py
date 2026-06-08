@@ -40,10 +40,12 @@ def download_if_missing(r2, r2_key: str, local_path: str):
         r2.download_file(R2_BUCKET, r2_key, local_path)
         size = Path(local_path).stat().st_size
         print(f"[startup] Downloaded {r2_key} ({size:,} bytes)")
-    except r2.exceptions.NoSuchKey:
-        print(f"[startup] {r2_key} not in R2 yet, will be created fresh")
     except Exception as e:
-        print(f"[startup] WARNING: Failed to download {r2_key}: {e}", file=sys.stderr)
+        err = str(e)
+        if "NoSuchKey" in err or "404" in err:
+            print(f"[startup] {r2_key} not in R2 yet, will be created fresh")
+        else:
+            print(f"[startup] WARNING: Failed to download {r2_key}: {e}", file=sys.stderr)
 
 
 try:
