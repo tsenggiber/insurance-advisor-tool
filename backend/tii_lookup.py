@@ -285,3 +285,35 @@ def set_coverage_cache(product_id: str, plan: str, fields: dict):
         )
     except Exception:
         pass
+
+
+_ARABIC_TO_CN = {'1': '一', '2': '二', '3': '三', '4': '四', '5': '五',
+                 '6': '六', '7': '七', '8': '八', '9': '九'}
+
+import re as _re2
+
+
+def _norm_product_key(product_name: str) -> str:
+    """標準化商品名稱，用於 manual cache key：去括號、統一計劃N為中文數字。"""
+    s = _re2.sub(r'[（(].*?[）)]', '', product_name).strip()
+    s = _re2.sub(r'計劃(\d)', lambda m: '計劃' + _ARABIC_TO_CN.get(m.group(1), m.group(1)), s)
+    return s[:20].strip()
+
+
+def get_manual_cache(company: str, product_name: str) -> dict | None:
+    """查手動覆蓋 R2 cache，用於老商品不在TII資料庫的情況。
+    R2 路徑：coverage-cache/manual/{company[:4]}/{product_normalized}.json
+    """
+    try:
+        company_key = company[:4]
+        product_key = _norm_product_key(product_name)
+        r2_key = f"coverage-cache/manual/{company_key}/{product_key}.json"
+        r2 = boto3.client(
+            "s3", endpoint_url=R2_ENDPOINT,
+            aws_access_key_id=R2_ACCESS_KEY, aws_secret_access_key=R2_SECRET_KEY,
+            config=Config(signature_version="s3v4"), region_name="auto",
+        )
+        resp = r2.get_object(Bucket=R2_BUCKET, Key=r2_key)
+        return json.loads(resp["Body"].read().decode("utf-8"))
+    except Exception:
+        return None

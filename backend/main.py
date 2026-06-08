@@ -274,10 +274,22 @@ def _enrich_one_policy(p: dict) -> dict:
     # ── Phase 2：查快取 → 有則直接用，無則 Claude 讀條款後存快取 ────────────────
     try:
         from tii_lookup import (tii_lookup, fetch_pdf_from_r2, parse_pdf_text,
-                                 get_coverage_cache, set_coverage_cache, COVERAGE_FIELDS)
+                                 get_coverage_cache, set_coverage_cache,
+                                 get_manual_cache, COVERAGE_FIELDS)
 
         match = tii_lookup(p.get("company", ""), name)
         if not match or not match.get("clause_r2_key"):
+            # 老商品不在TII → 查手動覆蓋 cache
+            manual = get_manual_cache(p.get("company", ""), name)
+            if manual:
+                for k in COVERAGE_FIELDS:
+                    v = manual.get(k)
+                    if v is None:
+                        continue
+                    if k == "is_lifetime":
+                        updated[k] = bool(v)
+                    elif isinstance(v, (int, float)) and float(v) > 0:
+                        updated[k] = v
             return updated
 
         product_id = match["product"].get("product_id", "")
