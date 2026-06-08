@@ -10,6 +10,14 @@ export default function AdminPage({ onBack }) {
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
   const [expiryEdit, setExpiryEdit] = useState(null) // { userId, value }
+  const [costs, setCosts] = useState(null)
+
+  const fetchCosts = async () => {
+    try {
+      const res = await axios.get(`${API}/admin/costs`)
+      setCosts(res.data)
+    } catch { /* 靜默 */ }
+  }
 
   const fetchUsers = async () => {
     try {
@@ -20,7 +28,7 @@ export default function AdminPage({ onBack }) {
     }
   }
 
-  useEffect(() => { fetchUsers() }, [])
+  useEffect(() => { fetchUsers(); fetchCosts() }, [])
 
   const handleCreate = async (e) => {
     e.preventDefault()
@@ -249,6 +257,55 @@ export default function AdminPage({ onBack }) {
             </table>
           </div>
         </div>
+        {/* API 費用追蹤 */}
+        {costs && (
+          <div className="bg-white rounded-xl border shadow-sm p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-navy">API 費用紀錄</h2>
+              <div className="text-right">
+                <p className="text-2xl font-bold text-navy">${costs.total_usd.toFixed(4)} <span className="text-sm font-normal text-gray-400">USD</span></p>
+                <p className="text-sm text-gray-400">≈ NT${(costs.total_usd * 32).toFixed(0)}</p>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b text-gray-400">
+                    <th className="text-left pb-2 font-medium">時間</th>
+                    <th className="text-left pb-2 font-medium">功能</th>
+                    <th className="text-right pb-2 font-medium">Input</th>
+                    <th className="text-right pb-2 font-medium">Output</th>
+                    <th className="text-right pb-2 font-medium">費用</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {costs.logs.map(log => (
+                    <tr key={log.id} className="text-gray-600">
+                      <td className="py-2 text-gray-400">{log.created_at}</td>
+                      <td className="py-2">
+                        <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                          log.endpoint === 'analyze' ? 'bg-blue-50 text-blue-600' :
+                          log.endpoint === 'extract-policies' ? 'bg-purple-50 text-purple-600' :
+                          'bg-gray-50 text-gray-500'
+                        }`}>
+                          {log.endpoint === 'analyze' ? '保障分析' :
+                           log.endpoint === 'extract-policies' ? '掃描保單' :
+                           log.endpoint === 'coverage-extract' ? '條款解讀' : log.endpoint}
+                        </span>
+                      </td>
+                      <td className="py-2 text-right font-mono">{log.input_tokens.toLocaleString()}</td>
+                      <td className="py-2 text-right font-mono">{log.output_tokens.toLocaleString()}</td>
+                      <td className="py-2 text-right font-mono text-navy">${log.cost_usd.toFixed(4)}</td>
+                    </tr>
+                  ))}
+                  {costs.logs.length === 0 && (
+                    <tr><td colSpan={5} className="py-4 text-center text-gray-300">尚無紀錄</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )

@@ -19,6 +19,26 @@ class Policy(BaseModel):
     annual_premium: float
     premium_type: str       # 自然保費 / 平準保費
     coverage_end_age: int
+    policy_date: Optional[str] = None   # 民國格式，如 110/05/01
+    is_lifetime: bool = False            # 終身型保障
+    occupation_class: Optional[int] = None  # 職業類別 1-6（傷害/意外險）
+    # 細部保障金額（掃描時自動填入，無法辨識填 0）
+    disease_hosp_daily: float = 0       # 疾病住院日額
+    accident_hosp_daily: float = 0      # 意外住院日額
+    inpatient_surgery: float = 0        # 住院手術（每次）
+    outpatient_surgery: float = 0       # 門診手術（每次）
+    specific_treatment: float = 0       # 特定處置（每次）
+    medical_reimburse: float = 0        # 醫療實支實付上限
+    accident_reimburse: float = 0       # 意外實支實付上限
+    deductible: float = 0               # 實支自負額
+    disability_monthly: float = 0       # 失能月給付
+    long_care_monthly: float = 0        # 長照月給付
+    critical_illness: float = 0         # 重大疾病/特定傷病一次金
+    cancer_first: float = 0             # 初次罹癌一次金
+    cancer_hosp_daily: float = 0        # 癌症住院日額
+    cancer_surgery: float = 0           # 癌症手術（每次）
+    accident_death: float = 0           # 意外身故保額
+    fracture: float = 0                 # 骨折保險金
 
 
 class AdvisorInfo(BaseModel):
@@ -108,3 +128,10 @@ class ProductCreate(BaseModel):
     insurance_type: str
     premium_type: str
     coverage_end_age: int = 75
+
+
+class RateTableRequest(BaseModel):
+    company: str
+    product_name: str
+    gender: str           # male / female
+    occupation_class: int | None = None  # 1-6，傷害險必填

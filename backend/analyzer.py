@@ -80,7 +80,7 @@ def _calculate_age(birth_date_str: str) -> int:
     return age
 
 
-def analyze_coverage(client_data: ClientData, policies: list[Policy]) -> AnalysisResult:
+def analyze_coverage(client_data: ClientData, policies: list[Policy], clause_texts: dict[str, str] | None = None) -> AnalysisResult:
     if client_data.birth_date:
         current_age = _calculate_age(client_data.birth_date)
         age_line = f"出生日期：{client_data.birth_date}（保險年齡 {current_age} 歲）"
@@ -89,6 +89,15 @@ def analyze_coverage(client_data: ClientData, policies: list[Policy]) -> Analysi
         age_line = f"保險年齡：{current_age} 歲"
     else:
         raise ValueError("需要提供出生日期或保險年齡")
+
+    clause_texts = clause_texts or {}
+    clause_parts = []
+    for p in policies:
+        key = f"{p.company}｜{p.product_name}"
+        text = clause_texts.get(key, "")
+        if text:
+            clause_parts.append(f"【{p.product_name}】\n{text[:2000]}")
+    clause_section = "\n\n".join(clause_parts) if clause_parts else "（未找到對應條款）"
 
     policies_text = "\n".join([
         f"- {p.company}｜{p.insurance_type}｜{p.product_name}｜"
@@ -116,12 +125,15 @@ def analyze_coverage(client_data: ClientData, policies: list[Policy]) -> Analysi
 - 失能險：月給付應 ≥ 月收入 60%＝ {client_data.monthly_income * 0.6:,.0f} 元
 - 長照險：50歲以上應已規劃
 
+## 保單條款原文（供參考，以條款為準）
+{clause_section}
+
 ## 自然保費趨勢估算說明
 - 自然保費（naturalPremium）：彙整所有「自然保費」型態保單，依台灣壽險市場費率，每5年估算年齡增長後的保費增幅（約每10年翻1.5-2倍）
 - 平準保費（levelPremium）：彙整所有「平準保費」型態保單的年繳保費，金額固定不變
 - 資料從 {current_age} 歲開始到 80 歲，每 5 年一個點
 
-請使用 output_analysis 工具回傳分析結果。"""
+請使用 output_analysis 工具回傳分析結果。""".format(clause_section=clause_section)
 
     response = _client.messages.create(
         model="claude-sonnet-4-6",
@@ -139,4 +151,5 @@ def analyze_coverage(client_data: ClientData, policies: list[Policy]) -> Analysi
         raise ValueError("Claude 未回傳分析結果")
 
     data = tool_use_block.input
-    return AnalysisResult(**data)
+    usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
+    return AnalysisResult(**data), usage

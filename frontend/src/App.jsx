@@ -3,7 +3,7 @@ import axios from 'axios'
 import AdvisorSetup from './components/AdvisorSetup'
 import ClientPage from './pages/ClientPage'
 import PoliciesPage from './pages/PoliciesPage'
-import ResultsPage from './pages/ResultsPage'
+import CoverageReviewPage from './pages/CoverageReviewPage'
 import LoginPage from './pages/LoginPage'
 import AdminPage from './pages/AdminPage'
 
@@ -13,7 +13,7 @@ const DEFAULT_CLIENT = {
   name: '', birth_date: '', insurance_age: '', gender: 'male', occupation_class: 1, monthly_income: 0
 }
 
-const STEPS = ['客戶資料', '現有保單', '分析結果']
+const STEPS = ['客戶資料', '現有保單', '保障總覽']
 
 export default function App() {
   const [authToken, setAuthToken] = useState(null)
@@ -77,7 +77,6 @@ export default function App() {
     try {
       const res = await axios.post(`${API}/analyze`, { client, policies, advisor })
       setAnalysis(res.data)
-      setStep(2)
     } catch (e) {
       if (e.response?.status === 401) { handleLogout(); return }
       setError(e.response?.data?.detail || '分析失敗，請確認後端服務已啟動（port 8000）')
@@ -170,17 +169,20 @@ export default function App() {
           <PoliciesPage
             policies={policies} setPolicies={setPolicies}
             onBack={() => setStep(0)}
-            onAnalyze={handleAnalyze}
-            isAnalyzing={isAnalyzing}
+            onNext={() => setStep(2)}
             error={error}
           />
         )}
-        {step === 2 && analysis && (
-          <ResultsPage
-            client={client} analysis={analysis}
+        {step === 2 && (
+          <CoverageReviewPage
+            client={client}
+            policies={policies}
+            analysis={analysis}
+            isAnalyzing={isAnalyzing}
+            onAnalyze={handleAnalyze}
             onDownload={handleDownload}
-            onReset={handleReset}
             onBack={() => setStep(1)}
+            onReset={handleReset}
           />
         )}
       </main>

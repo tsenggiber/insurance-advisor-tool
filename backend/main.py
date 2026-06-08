@@ -1,5 +1,6 @@
 import re
 import traceback
+import concurrent.futures
 from contextlib import asynccontextmanager
 from pathlib import Path
 from dotenv import load_dotenv
@@ -10,12 +11,12 @@ from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from fastapi.staticfiles import StaticFiles
-from models import AnalysisRequest, PptxRequest, LoginRequest, UserCreate, ExtractRequest, ProductCreate, SetExpiry
+from models import AnalysisRequest, PptxRequest, LoginRequest, UserCreate, ExtractRequest, ProductCreate, SetExpiry, RateTableRequest
 
 _anthropic = anthropic.Anthropic()
 from analyzer import analyze_coverage
 from pptx_generator import generate_pptx
-from database import get_db, init_db, lookup_product, insert_product
+from database import get_db, init_db, lookup_product, insert_product, insert_report, log_api_usage, get_cost_summary
 from auth import verify_password, create_token, decode_token
 
 
@@ -167,20 +168,211 @@ def admin_toggle_user(user_id: int, user: dict = Depends(get_admin_user)):
     return {"is_active": bool(new_status)}
 
 
+@app.get("/admin/costs")
+def admin_get_costs(user: dict = Depends(get_admin_user)):
+    return get_cost_summary()
+
+
 @app.post("/analyze")
 def analyze(req: AnalysisRequest, user: dict = Depends(get_current_user)):
     try:
-        result = analyze_coverage(req.client, req.policies)
+        # 嘗試從 tii 抓每張保單的條款文字
+        from tii_lookup import get_clause_text
+        clause_texts = {}
+        for p in req.policies:
+            policy_date = getattr(p, "policy_date", None) or None
+            text, score = get_clause_text(p.company, p.product_name, policy_date)
+            if text:
+                clause_texts[f"{p.company}｜{p.product_name}"] = text
+
+        result, usage = analyze_coverage(req.client, req.policies, clause_texts)
+        user_id = int(user["sub"])
         with get_db() as conn:
             conn.execute(
                 "INSERT INTO analysis_logs (user_id, client_name) VALUES (?,?)",
-                (int(user["sub"]), req.client.name)
+                (user_id, req.client.name)
             )
             conn.commit()
+        log_api_usage("analyze", "claude-sonnet-4-6", usage["input_tokens"], usage["output_tokens"], user_id)
         return result
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_COVERAGE_EXTRACT_TOOL = {
+    "name": "extract_policy_coverage",
+    "description": "從條款文字中提取此保單的保障給付細項",
+    "input_schema": {
+        "type": "object",
+        "required": ["disease_hosp_daily", "medical_reimburse", "accident_hosp_daily", "accident_reimburse"],
+        "properties": {
+            "disease_hosp_daily":  {"type": "number", "description": "疾病住院日額（元/日），無則0"},
+            "accident_hosp_daily": {"type": "number", "description": "意外住院日額（元/日），無則0"},
+            "inpatient_surgery":   {"type": "number", "description": "住院手術給付（元/次），無則0"},
+            "outpatient_surgery":  {"type": "number", "description": "門診手術給付（元/次），無則0"},
+            "specific_treatment":  {"type": "number", "description": "特定處置給付（元/次），無則0"},
+            "medical_reimburse":   {"type": "number", "description": "醫療費用實支實付上限（元），無則0"},
+            "accident_reimburse":  {"type": "number", "description": "意外醫療實支實付上限（元），無則0"},
+            "deductible":          {"type": "number", "description": "實支自負額（元），無則0"},
+            "disability_monthly":  {"type": "number", "description": "失能月給付（元/月），無則0"},
+            "long_care_monthly":   {"type": "number", "description": "長照月給付（元/月），無則0"},
+            "critical_illness":    {"type": "number", "description": "重大疾病/特定傷病一次金（元），無則0"},
+            "cancer_first":        {"type": "number", "description": "初次罹癌一次金（元），無則0"},
+            "cancer_hosp_daily":   {"type": "number", "description": "癌症住院日額（元/日），無則0"},
+            "cancer_surgery":      {"type": "number", "description": "癌症手術給付（元/次），無則0"},
+            "accident_death":      {"type": "number", "description": "意外身故保額（元），無則0"},
+            "fracture":            {"type": "number", "description": "骨折保險金（元），無則0"},
+            "coverage_end_age":    {"type": "integer", "description": "保障終止年齡（歲）"},
+            "is_lifetime":         {"type": "boolean", "description": "是否終身型保障"},
+        }
+    }
+}
+
+
+def _enrich_one_policy(p: dict) -> dict:
+    """
+    Phase 1：從商品名稱規則推斷保障欄位（快速）。
+    Phase 2：下載 tii 條款 PDF，用 Claude 提取細部保障（精確）。
+    """
+    from tii_lookup import tii_lookup, fetch_pdf_from_r2, parse_pdf_text
+
+    updated = dict(p)
+    name = p.get("product_name", "") or ""
+    amt  = float(p.get("coverage_amount", 0) or 0)
+
+    has_detail = any(float(p.get(k, 0) or 0) > 0 for k in [
+        "disease_hosp_daily", "accident_hosp_daily", "medical_reimburse",
+        "accident_reimburse", "disability_monthly", "accident_death",
+        "cancer_first", "critical_illness"
+    ])
+
+    # ── Phase 1：規則推斷 ─────────────────────────────────────────────────────
+    if not has_detail and amt > 0:
+        if "傷害保險" in name and "醫療" not in name and "失能" not in name:
+            updated["accident_death"] = amt
+        elif ("實支" in name or "實支實付" in name) and ("意外" in name or "傷害" in name):
+            updated["accident_reimburse"] = amt
+        elif ("實支" in name or "實支實付" in name):
+            updated["medical_reimburse"] = amt
+        elif "日額" in name and ("意外" in name or "傷害" in name):
+            updated["accident_hosp_daily"] = amt
+        elif "失能扶助金" in name or "失能生活費" in name:
+            updated["disability_monthly"] = amt
+        elif "重大傷病" in name or "特定傷病" in name or "重大疾病" in name:
+            updated["critical_illness"] = amt
+        # 一年定期失能 (非扶助金) → 一次金，歸入 critical_illness
+        elif "失能" in name and "扶助金" not in name and "長照" not in name:
+            updated["critical_illness"] = amt
+
+    # ── Phase 2：查快取 → 有則直接用，無則 Claude 讀條款後存快取 ────────────────
+    try:
+        from tii_lookup import (tii_lookup, fetch_pdf_from_r2, parse_pdf_text,
+                                 get_coverage_cache, set_coverage_cache, COVERAGE_FIELDS)
+
+        match = tii_lookup(p.get("company", ""), name)
+        if not match or not match.get("clause_r2_key"):
+            return updated
+
+        product_id = match["product"].get("product_id", "")
+
+        # 從商品名稱取出計劃別（計劃一/二/三 或 甲型/丁型）
+        plan_m = re.search(r'計劃([一二三四五六七八九])', name)
+        plan = f"計劃{plan_m.group(1)}" if plan_m else ""
+        if not plan:
+            type_m = re.search(r'[（(]([甲乙丙丁])型', name)
+            if type_m:
+                plan = f"{type_m.group(1)}型"
+
+        # ── 快取命中：直接套用，不呼叫 Claude ─────────────────────────────────
+        cached = get_coverage_cache(product_id, plan) if product_id else None
+        if cached:
+            for k in COVERAGE_FIELDS:
+                v = cached.get(k)
+                if v is None:
+                    continue
+                if k == "is_lifetime":
+                    updated[k] = bool(v)
+                elif isinstance(v, (int, float)) and float(v) > 0:
+                    updated[k] = v
+            return updated
+
+        # ── 快取未命中：下載 PDF + 呼叫 Claude ────────────────────────────────
+        pdf_bytes = fetch_pdf_from_r2(match["clause_r2_key"])
+        if not pdf_bytes:
+            return updated
+
+        clause_text = parse_pdf_text(pdf_bytes)
+        if not clause_text:
+            return updated
+
+        # 同時讀費率表 PDF（含計劃保障額度表），給 Claude 正確的計劃限額
+        rate_text = ""
+        rate_key = match.get("rate_r2_key")
+        if rate_key:
+            rate_pdf = fetch_pdf_from_r2(rate_key)
+            if rate_pdf:
+                rate_text = parse_pdf_text(rate_pdf)
+
+        plan_hint = plan or "（依條款判斷）"
+
+        hint = (
+            f"商品名稱：{name}\n"
+            f"投保計劃：{plan_hint}\n"
+            f"保費類型：{p.get('premium_type', '')}\n"
+            "【重要】掃描保額欄位可能是舊資料或主約金額，不可直接使用，請以條款/費率表中的計劃限額為準。\n\n"
+            "===條款節錄===\n" + clause_text[:2000] + "\n\n"
+            + (f"===費率表節錄（含計劃保障額度表）===\n{rate_text[:2000]}\n\n" if rate_text else "")
+            + "請從以上文字找出正確的保障給付金額，填入對應欄位（找不到填0）：\n"
+            "・disease_hosp_daily：住院病房費用限額（元/日，不含住院醫療費）\n"
+            "・medical_reimburse：住院醫療費實支上限（元，填1-30天的基本限額，不填倍數後的最大值）\n"
+            "・accident_reimburse：意外醫療費用實支上限（元）\n"
+            "・inpatient_surgery：外科手術費用限額（元/次）\n"
+            "・outpatient_surgery：住院前後門診費用限額（元/次）\n"
+            "・specific_treatment：出院後特殊治療費用限額（元/年，如腫瘤治療）\n"
+            "・accident_hosp_daily：意外住院日額（元/日）\n"
+            "・disability_monthly：失能月扶助金（元/月）【只填月給付型，一次金請填 critical_illness】\n"
+            "・long_care_monthly：長照月給付（元/月）\n"
+            "・critical_illness：重大疾病/特定傷病/失能一次金（元）\n"
+            "・cancer_first：初次罹癌一次金（元）\n"
+            "・cancer_hosp_daily：癌症住院日額（元/日）\n"
+            "・cancer_surgery：癌症手術給付（元/次）\n"
+            "・accident_death：意外身故保額（元）\n"
+            "・fracture：骨折保險金（元）\n"
+            "・is_lifetime：保障至終身或99歲填 true\n"
+            "若費率表節錄有計劃保障額度表，請對照「投保計劃」欄位取出對應數字。\n"
+            "同一條款可同時填多個欄位。"
+        )
+
+        resp = _anthropic.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            tools=[_COVERAGE_EXTRACT_TOOL],
+            tool_choice={"type": "tool", "name": "extract_policy_coverage"},
+            messages=[{"role": "user", "content": hint}]
+        )
+        log_api_usage("coverage-extract", "claude-sonnet-4-6",
+                      resp.usage.input_tokens, resp.usage.output_tokens)
+        tool_block = next((b for b in resp.content if b.type == "tool_use"), None)
+        if tool_block:
+            extracted = {}
+            for k, v in tool_block.input.items():
+                if v is None:
+                    continue
+                if isinstance(v, bool):
+                    updated[k] = v
+                    extracted[k] = v
+                elif isinstance(v, (int, float)) and float(v) > 0:
+                    updated[k] = v
+                    extracted[k] = v
+            # 存入快取，下次同商品直接取用
+            if product_id and extracted:
+                set_coverage_cache(product_id, plan, extracted)
+
+    except Exception:
+        pass
+
+    return updated
 
 
 _EXTRACT_TOOL = {
@@ -197,13 +389,32 @@ _EXTRACT_TOOL = {
                     "required": ["company", "insurance_type", "product_name",
                                  "coverage_amount", "annual_premium", "premium_type", "coverage_end_age"],
                     "properties": {
-                        "company":         {"type": "string"},
-                        "insurance_type":  {"type": "string", "enum": ["壽險","醫療險","癌症險","意外險","失能險","長照險","儲蓄險"]},
-                        "product_name":    {"type": "string"},
-                        "coverage_amount": {"type": "number", "description": "保障金額（元），無法辨識填0"},
-                        "annual_premium":  {"type": "number", "description": "年繳保費（元），月繳請乘12，無法辨識填0"},
-                        "premium_type":    {"type": "string", "enum": ["自然保費","平準保費"]},
-                        "coverage_end_age":{"type": "integer", "description": "保障終止年齡，無法辨識填75"},
+                        "company":          {"type": "string"},
+                        "insurance_type":   {"type": "string", "enum": ["壽險","醫療險","癌症險","意外險","失能險","長照險","儲蓄險"]},
+                        "product_name":     {"type": "string"},
+                        "coverage_amount":  {"type": "number", "description": "主要保障金額（元），無法辨識填0"},
+                        "annual_premium":   {"type": "number", "description": "年繳保費（元），月繳請乘12，無法辨識填0"},
+                        "premium_type":     {"type": "string", "enum": ["自然保費","平準保費"]},
+                        "coverage_end_age": {"type": "integer", "description": "保障終止年齡，無法辨識填75"},
+                        "policy_date":        {"type": "string",  "description": "核保日期或生效日期，民國格式如 110/05/01，無法辨識填空字串"},
+                        "is_lifetime":        {"type": "boolean", "description": "是否為終身型保障（保障至99歲或終身）"},
+                        "occupation_class":   {"type": "integer", "description": "職業類別 1-6，傷害險/意外險才需填，其他險種填 null"},
+                        "disease_hosp_daily":   {"type": "number", "description": "疾病住院日額（元/日），無則填0"},
+                        "accident_hosp_daily":  {"type": "number", "description": "意外住院日額（元/日），無則填0"},
+                        "inpatient_surgery":    {"type": "number", "description": "住院手術每次給付（元），無則填0"},
+                        "outpatient_surgery":   {"type": "number", "description": "門診手術每次給付（元），無則填0"},
+                        "specific_treatment":   {"type": "number", "description": "特定處置每次給付（元），無則填0"},
+                        "medical_reimburse":    {"type": "number", "description": "醫療實支實付上限（元），無則填0"},
+                        "accident_reimburse":   {"type": "number", "description": "意外實支實付上限（元），無則填0"},
+                        "deductible":           {"type": "number", "description": "實支實付自負額（元），無則填0"},
+                        "disability_monthly":   {"type": "number", "description": "失能月給付（元/月），無則填0"},
+                        "long_care_monthly":    {"type": "number", "description": "長照月給付（元/月），無則填0"},
+                        "critical_illness":     {"type": "number", "description": "重大疾病或特定傷病一次金（元），無則填0"},
+                        "cancer_first":         {"type": "number", "description": "初次罹癌一次金（元），無則填0"},
+                        "cancer_hosp_daily":    {"type": "number", "description": "癌症住院日額（元/日），無則填0"},
+                        "cancer_surgery":       {"type": "number", "description": "癌症手術每次給付（元），無則填0"},
+                        "accident_death":       {"type": "number", "description": "意外身故保額（元），無則填0"},
+                        "fracture":             {"type": "number", "description": "骨折保險金（元），無則填0"},
                     }
                 }
             }
@@ -225,7 +436,7 @@ def extract_policies(req: ExtractRequest, user: dict = Depends(get_current_user)
 
         response = _anthropic.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2048,
+            max_tokens=8192,
             tools=[_EXTRACT_TOOL],
             tool_choice={"type": "tool", "name": "output_policies"},
             messages=[{
@@ -238,21 +449,31 @@ def extract_policies(req: ExtractRequest, user: dict = Depends(get_current_user)
                     {
                         "type": "text",
                         "text": (
-                            "請從這份保單文件中辨識所有保單資訊。\n"
-                            "保費類型判斷原則：文件上有寫「自然保費」、或是醫療/意外附約（費率隨年齡增加）→ 填「自然保費」；"
-                            "主約或儲蓄型（保費固定）→ 填「平準保費」。\n"
-                            "請用 output_policies 工具回傳所有找到的保單，找不到任何保單則回傳空陣列。"
+                            "請從這張圖片中辨識所有保單資訊。圖片可能是：正式保單文件、保險公司系統截圖、保單查詢列表、對帳單等任何形式。\n"
+                            "只要能辨識到保單號碼、商品名稱、承保日、保額等任一欄位，就請輸出對應的保單資料。\n"
+                            "若圖中有主約＋多張附約，每張各輸出一筆。\n"
+                            "保費類型判斷：終身壽險/儲蓄險/養老險 → 平準保費；醫療附約/意外附約/定期附約（年繳費率隨年齡變動）→ 自然保費。\n"
+                            "終身判斷：保障至99/100歲或標示「終身」→ is_lifetime=true。\n"
+                            "保費欄位：若圖中只有舊的保費數字，仍請填入；若看不到填0。\n"
+                            "職業類別：傷害/意外險看到「第N類」請填 occupation_class=N。\n"
+                            "計劃別：若保單名後有計劃別（如計劃一/二/三），請一併納入 product_name，如「新住院醫療保險附約計劃二」。\n"
+                            "細部金額：依圖中記載盡量填入，看不到填0。\n"
+                            "請用 output_policies 工具回傳所有找到的保單，找不到任何保單才回傳空陣列。"
                         )
                     }
                 ]
             }]
         )
 
+        print(f"[extract] stop_reason={response.stop_reason}, blocks={len(response.content)}")
+        log_api_usage("extract-policies", "claude-sonnet-4-6",
+                      response.usage.input_tokens, response.usage.output_tokens,
+                      int(user["sub"]))
         tool_block = next((b for b in response.content if b.type == "tool_use"), None)
         if not tool_block:
             raise ValueError("Claude 未回傳辨識結果")
 
-        policies = tool_block.input["policies"]
+        policies = tool_block.input.get("policies", [])
         for p in policies:
             match = lookup_product(p["company"], p["product_name"])
             if match:
@@ -264,6 +485,20 @@ def extract_policies(req: ExtractRequest, user: dict = Depends(get_current_user)
                 p["db_score"]  = 0
 
         return {"policies": policies}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/rate-table")
+def get_rate_table(req: RateTableRequest, user: dict = Depends(get_current_user)):
+    """查詢保單費率表（優先從快取，否則從 R2 PDF 提取）"""
+    try:
+        from rate_lookup import get_rate_table
+        rates = get_rate_table(req.company, req.product_name, req.gender, req.occupation_class)
+        if not rates:
+            return {"rates": [], "source": "not_found"}
+        return {"rates": rates, "source": "db" if len(rates) > 0 else "not_found"}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -287,6 +522,49 @@ def add_product(req: ProductCreate, user: dict = Depends(get_current_user)):
     if not ok:
         raise HTTPException(status_code=400, detail="新增失敗，請重試")
     return {"ok": True}
+
+
+@app.post("/enrich-policies")
+def enrich_policies_endpoint(body: dict, user: dict = Depends(get_current_user)):
+    """
+    並行讀取所有保單的條款 PDF，提取正確保障細項。
+    回傳 enriched policies（含 disease_hosp_daily, medical_reimburse 等欄位）。
+    """
+    policies_input = body.get("policies", [])
+    if not policies_input:
+        return {"policies": []}
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(_enrich_one_policy, p) for p in policies_input]
+            enriched = [f.result() for f in futures]
+        return {"policies": enriched}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/report-product")
+def report_product(body: dict, user: dict = Depends(get_current_user)):
+    company      = body.get("company", "")
+    product_name = body.get("product_name", "")
+    note         = body.get("note", "")
+    if not company or not product_name:
+        raise HTTPException(status_code=400, detail="缺少必填欄位")
+    ok = insert_report(company, product_name, user["username"], note)
+    if not ok:
+        raise HTTPException(status_code=500, detail="回報失敗")
+    return {"ok": True}
+
+
+@app.get("/reports")
+def list_reports(user: dict = Depends(get_current_user)):
+    if not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="無權限")
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM product_reports ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 @app.post("/download-pptx")

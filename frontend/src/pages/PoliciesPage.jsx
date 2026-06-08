@@ -22,7 +22,7 @@ const EMPTY_FORM = {
   coverage_end_age: 75,
 }
 
-export default function PoliciesPage({ policies, setPolicies, onBack, onAnalyze, isAnalyzing, error }) {
+export default function PoliciesPage({ policies, setPolicies, onBack, onNext, error }) {
   const [form, setForm]             = useState(EMPTY_FORM)
   const [showForm, setShowForm]     = useState(false)
   const [scanning, setScanning]     = useState(false)
@@ -33,6 +33,7 @@ export default function PoliciesPage({ policies, setPolicies, onBack, onAnalyze,
   const [premiumOverride, setPremiumOverride] = useState({})
   // which index is being submitted to DB
   const [savingIdx, setSavingIdx]   = useState(null)
+  const [reportedIdx, setReportedIdx] = useState(new Set())
   const fileInputRef                = useRef(null)
 
   // ── Manual add ───────────────────────────────────────────────────────────────
@@ -119,6 +120,20 @@ export default function PoliciesPage({ policies, setPolicies, onBack, onAnalyze,
       alert('加入失敗：' + (e.response?.data?.detail || '請重試'))
     } finally {
       setSavingIdx(null)
+    }
+  }
+
+  // ── Report unverified product ────────────────────────────────────────────────
+
+  const handleReport = async (i) => {
+    const p = scanResult[i]
+    try {
+      await axios.post(`${API}/report-product`, {
+        company: p.company, product_name: p.product_name, note: ''
+      })
+      setReportedIdx(prev => new Set([...prev, i]))
+    } catch (e) {
+      alert('回報失敗，請重試')
     }
   }
 
@@ -273,6 +288,14 @@ export default function PoliciesPage({ policies, setPolicies, onBack, onAnalyze,
                               className="text-xs bg-teal text-white px-3 py-1 rounded-lg hover:bg-teal/90 transition disabled:opacity-60">
                               {savingIdx === i ? '儲存中...' : '確認並加入資料庫'}
                             </button>
+                            {reportedIdx.has(i)
+                              ? <span className="text-xs text-gray-400">已回報</span>
+                              : <button
+                                  onClick={() => handleReport(i)}
+                                  className="text-xs text-gray-400 hover:text-orange-500 underline transition">
+                                  回報問題
+                                </button>
+                            }
                           </>
                       }
                     </div>
@@ -404,14 +427,9 @@ export default function PoliciesPage({ policies, setPolicies, onBack, onAnalyze,
           className="px-6 py-3 border rounded-lg text-gray-600 hover:bg-gray-50 transition">
           ← 上一步
         </button>
-        <button onClick={onAnalyze} disabled={isAnalyzing}
-          className="flex-1 bg-navy text-white py-3 rounded-lg font-medium hover:bg-navy/90 transition disabled:opacity-60 disabled:cursor-not-allowed">
-          {isAnalyzing
-            ? <span className="flex items-center justify-center gap-2">
-                <span className="animate-spin inline-block">⟳</span> AI 分析中，約需 15 秒...
-              </span>
-            : '🔍 開始 AI 分析'
-          }
+        <button onClick={onNext}
+          className="flex-1 bg-navy text-white py-3 rounded-lg font-medium hover:bg-navy/90 transition">
+          查看保障總覽 →
         </button>
       </div>
     </div>
