@@ -20,7 +20,7 @@ function calcAge(birthDateStr) {
   return { actualAge, insuranceAge }
 }
 
-export default function ClientPage({ client, setClient, onNext }) {
+export default function ClientPage({ client, setClient, onNext, savedSessions = [], onLoadSession, onDeleteSession }) {
   const [rocYear,  setRocYear]  = useState('')
   const [rocMonth, setRocMonth] = useState('')
   const [rocDay,   setRocDay]   = useState('')
@@ -74,7 +74,37 @@ export default function ClientPage({ client, setClient, onNext }) {
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-2xl mx-auto space-y-4">
+
+      {/* ── 歷史紀錄 ── */}
+      {savedSessions.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border p-4">
+          <h3 className="text-sm font-semibold text-gray-600 mb-3">歷史紀錄</h3>
+          <div className="space-y-2">
+            {savedSessions.map(s => (
+              <div key={s.id} className="flex items-center justify-between gap-2 py-2 border-b last:border-0">
+                <button
+                  onClick={() => onLoadSession?.(s.id)}
+                  className="flex-1 text-left text-sm font-medium text-navy hover:text-teal transition truncate"
+                >
+                  {s.client_name}
+                </button>
+                <span className="text-xs text-gray-400 shrink-0">
+                  {new Date(s.saved_at).toLocaleDateString('zh-TW')}
+                </span>
+                <button
+                  onClick={() => onDeleteSession?.(s.id)}
+                  className="text-xs text-gray-300 hover:text-red-400 transition shrink-0 px-1"
+                  title="刪除"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl shadow-sm border p-6">
         <h2 className="text-xl font-bold text-navy mb-6">客戶基本資料</h2>
         <form onSubmit={handleSubmit} className="space-y-5">
@@ -187,6 +217,7 @@ export default function ClientPage({ client, setClient, onNext }) {
           </button>
         </form>
       </div>
+
     </div>
   )
 }

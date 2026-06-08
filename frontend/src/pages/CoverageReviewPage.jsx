@@ -1,7 +1,8 @@
 // 保障總覽頁：保障檢視（pyramid）+ 方案推薦（AI分析）雙 tab
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
+import html2canvas from 'html2canvas'
 
 const API = import.meta.env.VITE_API_URL ?? ''
 import { Line } from 'react-chartjs-2'
@@ -231,9 +232,47 @@ const Row = ({ label, value, unit = '元' }) => (
   </div>
 )
 
+// ── 缺口分析：狀態樣式 ────────────────────────────────────────────────────────
+
+const STATUS = {
+  '足夠':     { bg: 'bg-green-50',  border: 'border-green-200',  badge: 'bg-green-500',  icon: '✅' },
+  '偏低':     { bg: 'bg-yellow-50', border: 'border-yellow-200', badge: 'bg-yellow-500', icon: '⚠️' },
+  '嚴重不足': { bg: 'bg-red-50',    border: 'border-red-200',    badge: 'bg-red-500',    icon: '❌' },
+}
+
+// ── 固定基準值（依台灣醫療水準，無需 AI 呼叫）────────────────────────────────
+
+const BENCHMARKS = [
+  { key: 'disease_hosp',       label: '疾病住院日額',      unit: '元/日',  min: 3000,    ideal: 5000,
+    get: c => c.diseaseHospLifetime + c.diseaseHospNonLifetime },
+  { key: 'accident_hosp',      label: '意外住院日額',      unit: '元/日',  min: 3000,    ideal: 5000,
+    get: c => c.accidentHospDaily },
+  { key: 'medical_reimburse',  label: '醫療實支實付',      unit: '元/次',  min: 200000,  ideal: 300000,
+    get: c => c.medicalReimburseQuasi + c.medicalReimburseNon },
+  { key: 'inpatient_surgery',  label: '住院手術費',        unit: '元/次',  min: 150000,  ideal: 160000,
+    rangeNote: (current) => current > 0
+      ? `手術費依等級分級，依客戶條款換算：最低約 ${Math.round(current / 48).toLocaleString()} 元，最高 ${current.toLocaleString()} 元/次`
+      : '手術費依等級分級，詳見條款手術等級表',
+    get: c => c.inpatientSurgeryLifetime + c.inpatientSurgeryNonLifetime },
+  { key: 'outpatient_surgery', label: '門診手術費',        unit: '元/次',  min: 30000,   ideal: 50000,
+    get: c => c.outpatientSurgeryLifetime + c.outpatientSurgeryNonLifetime },
+  { key: 'cancer_first',       label: '初次罹癌一次金',    unit: '元',     min: 500000,  ideal: 1000000,
+    get: c => c.cancerFirst },
+  { key: 'critical_illness',   label: '重大傷病/特定傷病', unit: '元',     min: 500000,  ideal: 1000000,
+    get: c => c.criticalIllness },
+  { key: 'disability_monthly', label: '失能月給付',        unit: '元/月',  min: 30000,   ideal: 50000,
+    get: c => c.disabilityMonthly },
+  { key: 'long_care_monthly',  label: '長照月給付',        unit: '元/月',  min: 30000,   ideal: 50000,
+    get: c => c.longCareMonthly },
+  { key: 'accident_death',     label: '意外身故保障',      unit: '元',     min: 2000000, ideal: 5000000,
+    get: c => c.accidentDeath },
+  { key: 'life',               label: '壽險保障',          unit: '元',     min: 3000000, ideal: 10000000,
+    get: c => c.lifeTraditional },
+]
+
 // ── 保障檢視主體 ──────────────────────────────────────────────────────────────
 
-function CoverageView({ policies, client }) {
+function CoverageView({ policies, client, onEnriched }) {
   const currentAge = getAge(client)
   const [rateTables, setRateTables] = useState({})
   const [rateLoading, setRateLoading] = useState(false)
@@ -261,6 +300,7 @@ function CoverageView({ policies, client }) {
       .then(res => {
         if (res.data.policies && res.data.policies.length > 0) {
           setEnrichedPolicies(res.data.policies)
+          onEnriched?.(res.data.policies)
         }
       })
       .catch(() => {})
@@ -357,6 +397,7 @@ function CoverageView({ policies, client }) {
 
   const TABS = [
     { key: 'coverage', label: '保障檢視' },
+    { key: 'gap',      label: '缺口分析' },
     { key: 'chart',    label: '保費曲線' },
     { key: 'policies', label: '保單明細' },
   ]
@@ -477,6 +518,11 @@ function CoverageView({ policies, client }) {
               <div className="text-sm font-bold text-green-700">手術 / 處置</div>
               <div className="space-y-1">
                 <Row label="住院手術" value={fmtM(inpatientSurgTotal)} unit="元/次" />
+                {inpatientSurgTotal > 0 && (
+                  <div className="text-xs text-amber-600 mt-0.5 leading-tight">
+                    依手術等級：約 {Math.round(inpatientSurgTotal / 48).toLocaleString()}–{inpatientSurgTotal.toLocaleString()}元
+                  </div>
+                )}
                 <Row label="門診手術" value={fmtM(outpatientSurgTotal)} unit="元/次" />
                 <Row label="特定處置" value={fmtM(specificTreatTotal)} unit="元/次" />
               </div>
@@ -526,7 +572,49 @@ function CoverageView({ policies, client }) {
       </div>
       )} {/* end 保障檢視 */}
 
-      {/* ══════════════ 頁籤二：保費曲線 ══════════════ */}
+      {/* ══════════════ 頁籤：缺口分析 ══════════════ */}
+      {activeTab === 'gap' && (
+        <div className="space-y-3">
+          <div className="text-xs text-gray-400 px-1">依台灣醫療水準訂定固定基準，自動計算，不額外收費</div>
+          {BENCHMARKS.map(b => {
+            const current = b.get(c)
+            const status = current >= b.ideal ? '足夠' : current >= b.min ? '偏低' : '嚴重不足'
+            const st = STATUS[status]
+            return (
+              <div key={b.key} className={`${st.bg} ${st.border} border rounded-xl p-3`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-sm font-semibold text-gray-800">{st.icon} {b.label}</span>
+                  <span className={`${st.badge} text-white text-xs px-2 py-0.5 rounded-full`}>{status}</span>
+                </div>
+                <div className="flex items-baseline gap-2 mb-2">
+                  <span className="text-xs text-gray-400">目前</span>
+                  <span className="text-xl font-bold text-gray-800">{fmtM(current)}</span>
+                  <span className="text-xs text-gray-400">{b.unit}</span>
+                </div>
+                <div className="flex items-center gap-5 flex-wrap">
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-xs text-gray-400">建議最低</span>
+                    <span className="text-base font-bold text-gray-800">{fmtM(b.min)}</span>
+                    <span className="text-xs text-gray-500">{b.unit}</span>
+                  </div>
+                  <div className="flex items-baseline gap-1 opacity-60">
+                    <span className="text-xs text-gray-400">建議理想</span>
+                    <span className="text-sm text-gray-500">{fmtM(b.ideal)}</span>
+                    <span className="text-xs text-gray-400">{b.unit}</span>
+                  </div>
+                </div>
+                {b.rangeNote && (
+                  <div className="text-xs text-amber-600 bg-amber-50 rounded px-2 py-1 mt-2">
+                    {typeof b.rangeNote === 'function' ? b.rangeNote(current) : b.rangeNote}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ══════════════ 頁籤：保費曲線 ══════════════ */}
       {activeTab === 'chart' && (
         <div className="space-y-3">
           {rateLoading && (
@@ -634,12 +722,6 @@ function CoverageView({ policies, client }) {
 
 // ── 方案推薦（AI 分析）────────────────────────────────────────────────────────
 
-const STATUS = {
-  '足夠':     { bg: 'bg-green-50',  border: 'border-green-200',  badge: 'bg-green-500',  icon: '✅' },
-  '偏低':     { bg: 'bg-yellow-50', border: 'border-yellow-200', badge: 'bg-yellow-500', icon: '⚠️' },
-  '嚴重不足': { bg: 'bg-red-50',    border: 'border-red-200',    badge: 'bg-red-500',    icon: '❌' },
-}
-
 function AnalysisView({ analysis, client, onAnalyze, isAnalyzing, onDownload }) {
   if (!analysis) {
     return (
@@ -738,12 +820,39 @@ function AnalysisView({ analysis, client, onAnalyze, isAnalyzing, onDownload }) 
 export default function CoverageReviewPage({
   client, policies, analysis, isAnalyzing,
   onAnalyze, onDownload, onBack, onReset,
+  onSave, onEnriched,
 }) {
   const [tab, setTab] = useState('coverage')
+  const [saving, setSaving] = useState(false)
+  const coverageRef = useRef(null)
+
+  const handleSaveImage = async () => {
+    const el = coverageRef.current
+    if (!el) return
+    setSaving(true)
+    try {
+      const canvas = await html2canvas(el, {
+        backgroundColor: '#f9fafb',
+        scale: 2,
+        useCORS: true,
+        logging: false,
+      })
+      const url = canvas.toDataURL('image/png')
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `保障總覽_${client.name}.png`
+      a.click()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handlePrint = () => window.print()
 
   return (
     <div className="max-w-4xl mx-auto">
-      <div className="flex gap-3 mb-4 items-center">
+      {/* ── 操作列（列印時隱藏）── */}
+      <div className="no-print flex gap-2 mb-4 items-center flex-wrap">
         <button onClick={onBack}
           className="px-4 py-2 border rounded-lg text-sm text-gray-600 hover:bg-gray-50 transition">
           ← 修改保單
@@ -751,14 +860,34 @@ export default function CoverageReviewPage({
         <h2 className="text-xl font-bold text-navy flex-1">
           {client.name} 的保障總覽
         </h2>
+        {onSave && (
+          <button onClick={onSave}
+            className="px-3 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition flex items-center gap-1">
+            💾 儲存紀錄
+          </button>
+        )}
+        <button onClick={handleSaveImage} disabled={saving}
+          className="px-3 py-2 bg-teal text-white rounded-lg text-sm hover:bg-teal/90 transition disabled:opacity-60 flex items-center gap-1">
+          {saving ? <span className="animate-spin inline-block">⟳</span> : '⬇'} 存圖
+        </button>
+        <button onClick={handlePrint}
+          className="px-3 py-2 bg-navy text-white rounded-lg text-sm hover:bg-navy/90 transition flex items-center gap-1">
+          🖨 列印
+        </button>
         <button onClick={onReset}
           className="px-4 py-2 border rounded-lg text-sm text-gray-500 hover:bg-gray-50 transition">
           重新開始
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b mb-4">
+      {/* ── 列印時才顯示的標題 ── */}
+      <div className="print-only">
+        <h1 className="text-2xl font-bold text-gray-800 mb-1">{client.name} 的保障總覽</h1>
+        <p className="text-sm text-gray-400 mb-4">分析日期：{new Date().toLocaleDateString('zh-TW')}</p>
+      </div>
+
+      {/* ── Tabs（列印時隱藏）── */}
+      <div className="no-print flex border-b mb-4">
         {[
           { key: 'coverage', label: '📊 保障檢視' },
           { key: 'analysis', label: `🔍 方案推薦${analysis ? '' : ' (未分析)'}` },
@@ -774,15 +903,28 @@ export default function CoverageReviewPage({
         ))}
       </div>
 
-      {tab === 'coverage' && <CoverageView policies={policies} client={client} />}
+      {/* ── 保障檢視（存圖範圍）── */}
+      {tab === 'coverage' && (
+        <div ref={coverageRef} className="bg-gray-50 p-2 rounded-xl">
+          <CoverageView policies={policies} client={client} onEnriched={onEnriched} />
+        </div>
+      )}
+
+      {/* ── 列印時強制顯示保障檢視 ── */}
+      <div className="print-only">
+        <CoverageView policies={policies} client={client} />
+      </div>
+
       {tab === 'analysis' && (
-        <AnalysisView
-          analysis={analysis}
-          client={client}
-          onAnalyze={onAnalyze}
-          isAnalyzing={isAnalyzing}
-          onDownload={onDownload}
-        />
+        <div className="no-print">
+          <AnalysisView
+            analysis={analysis}
+            client={client}
+            onAnalyze={onAnalyze}
+            isAnalyzing={isAnalyzing}
+            onDownload={onDownload}
+          />
+        </div>
       )}
     </div>
   )

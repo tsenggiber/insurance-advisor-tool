@@ -16,7 +16,9 @@ from models import AnalysisRequest, PptxRequest, LoginRequest, UserCreate, Extra
 _anthropic = anthropic.Anthropic()
 from analyzer import analyze_coverage
 from pptx_generator import generate_pptx
-from database import get_db, init_db, lookup_product, insert_product, insert_report, log_api_usage, get_cost_summary
+from database import (get_db, init_db, lookup_product, insert_product, insert_report,
+                      log_api_usage, get_cost_summary,
+                      save_client_session, list_client_sessions, get_client_session, delete_client_session)
 from auth import verify_password, create_token, decode_token
 
 
@@ -209,10 +211,10 @@ _COVERAGE_EXTRACT_TOOL = {
         "properties": {
             "disease_hosp_daily":  {"type": "number", "description": "疾病住院日額（元/日），無則0"},
             "accident_hosp_daily": {"type": "number", "description": "意外住院日額（元/日），無則0"},
-            "inpatient_surgery":   {"type": "number", "description": "住院手術給付（元/次），無則0"},
-            "outpatient_surgery":  {"type": "number", "description": "門診手術給付（元/次），無則0"},
-            "specific_treatment":  {"type": "number", "description": "特定處置給付（元/次），無則0"},
-            "medical_reimburse":   {"type": "number", "description": "醫療費用實支實付上限（元），無則0"},
+            "inpatient_surgery":   {"type": "number", "description": "外科手術費用限額（元/次）。若條款同時涵蓋住院與門診外科手術（如新住院醫療附約），填此欄，無則0"},
+            "outpatient_surgery":  {"type": "number", "description": "真正的門診外科手術費用限額（元/次）。注意：「住院前後門診費用」「住院前後門診費保險金」是掛號/診療費補貼，絕對不是門診手術，填0。無單獨門診手術條款則填0"},
+            "specific_treatment":  {"type": "number", "description": "出院後特殊治療費用限額（元/年），如放射線治療、化療，無則0"},
+            "medical_reimburse":   {"type": "number", "description": "住院醫療費用實支實付上限（元）。填1-30天的基本限額，不填倍數後最大值，無則0"},
             "accident_reimburse":  {"type": "number", "description": "意外醫療實支實付上限（元），無則0"},
             "deductible":          {"type": "number", "description": "實支自負額（元），無則0"},
             "disability_monthly":  {"type": "number", "description": "失能月給付（元/月），無則0"},
@@ -325,11 +327,13 @@ def _enrich_one_policy(p: dict) -> dict:
             + (f"===費率表節錄（含計劃保障額度表）===\n{rate_text[:2000]}\n\n" if rate_text else "")
             + "請從以上文字找出正確的保障給付金額，填入對應欄位（找不到填0）：\n"
             "・disease_hosp_daily：住院病房費用限額（元/日，不含住院醫療費）\n"
-            "・medical_reimburse：住院醫療費實支上限（元，填1-30天的基本限額，不填倍數後的最大值）\n"
+            "・medical_reimburse：住院醫療費實支上限（元，填1-30天基本限額，不填倍數後最大值）\n"
             "・accident_reimburse：意外醫療費用實支上限（元）\n"
-            "・inpatient_surgery：外科手術費用限額（元/次）\n"
-            "・outpatient_surgery：住院前後門診費用限額（元/次）\n"
-            "・specific_treatment：出院後特殊治療費用限額（元/年，如腫瘤治療）\n"
+            "・inpatient_surgery：外科手術費用限額（元/次）。若條款同時涵蓋住院和門診外科手術，填此欄\n"
+            "・outpatient_surgery：【嚴格定義】真正的門診外科手術費用限額（元/次）。\n"
+            "  ※「住院前後門診費用」「住院前後門診費保險金」= 掛號補貼，不是手術，填0\n"
+            "  ※ 無單獨門診手術條款時填0，不要猜測\n"
+            "・specific_treatment：出院後特殊治療費用限額（元/年，如腫瘤放化療）\n"
             "・accident_hosp_daily：意外住院日額（元/日）\n"
             "・disability_monthly：失能月扶助金（元/月）【只填月給付型，一次金請填 critical_illness】\n"
             "・long_care_monthly：長照月給付（元/月）\n"
@@ -565,6 +569,37 @@ def list_reports(user: dict = Depends(get_current_user)):
             "SELECT * FROM product_reports ORDER BY created_at DESC"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.post("/client-sessions")
+def create_session(body: dict, user: dict = Depends(get_current_user)):
+    client_name = body.get("client_name", "").strip()
+    client_data = body.get("client", {})
+    policies    = body.get("policies", [])
+    if not client_name:
+        raise HTTPException(status_code=400, detail="缺少客戶姓名")
+    sid = save_client_session(int(user["sub"]), client_name, client_data, policies)
+    return {"id": sid}
+
+
+@app.get("/client-sessions")
+def list_sessions(user: dict = Depends(get_current_user)):
+    return list_client_sessions(int(user["sub"]))
+
+
+@app.get("/client-sessions/{session_id}")
+def get_session(session_id: int, user: dict = Depends(get_current_user)):
+    s = get_client_session(session_id, int(user["sub"]))
+    if not s:
+        raise HTTPException(status_code=404, detail="找不到紀錄")
+    return s
+
+
+@app.delete("/client-sessions/{session_id}")
+def remove_session(session_id: int, user: dict = Depends(get_current_user)):
+    if not delete_client_session(session_id, int(user["sub"])):
+        raise HTTPException(status_code=404, detail="找不到紀錄")
+    return {"ok": True}
 
 
 @app.post("/download-pptx")

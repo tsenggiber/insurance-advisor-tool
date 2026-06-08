@@ -6,3 +6,22 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang TC',
     'Noto Sans TC', 'Microsoft JhengHei', sans-serif;
 }
+
+.print-only { display: none; }
+
+@media print {
+  /* 隱藏所有不必要的 UI */
+  header,
+  .no-print {
+    display: none !important;
+  }
+  /* 列印時才顯示 */
+  .print-only {
+    display: block !important;
+  }
+  /* 讓內容全寬、去除 padding */
+  body { margin: 0; background: white; }
+  .max-w-4xl { max-width: 100% !important; padding: 0 12px !important; }
+  /* 確保顏色、背景正確列印 */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

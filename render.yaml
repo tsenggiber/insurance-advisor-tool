@@ -3,9 +3,17 @@ services:
     name: insurance-advisor-tool
     runtime: python
     buildCommand: cd frontend && npm install && npm run build && cd ../backend && pip install -r requirements.txt
-    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: cd backend && python startup.py && uvicorn main:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: JWT_SECRET
         generateValue: true
+      - key: DB_PATH
+        value: /data/app.db
+      - key: TII_DB_PATH
+        value: /data/tii_scraper.db

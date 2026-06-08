@@ -2,7 +2,7 @@ import sqlite3
 import os
 from difflib import SequenceMatcher
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "app.db")
+DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "app.db"))
 
 
 def get_db():
@@ -60,6 +60,15 @@ def init_db():
                 note TEXT DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE TABLE IF NOT EXISTS client_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                client_name TEXT NOT NULL,
+                client_data TEXT NOT NULL,
+                policies TEXT NOT NULL,
+                saved_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (user_id) REFERENCES users(id)
             );
         """)
         # 舊版升級：補欄位
@@ -182,6 +191,56 @@ def insert_report(company: str, product_name: str, reported_by: str, note: str =
         return True
     except Exception:
         return False
+
+
+def save_client_session(user_id: int, client_name: str, client_data: dict, policies: list) -> int:
+    import json
+    with get_db() as conn:
+        cur = conn.execute(
+            "INSERT INTO client_sessions (user_id, client_name, client_data, policies) VALUES (?,?,?,?)",
+            (user_id, client_name,
+             json.dumps(client_data, ensure_ascii=False),
+             json.dumps(policies, ensure_ascii=False))
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def list_client_sessions(user_id: int) -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, client_name, saved_at FROM client_sessions WHERE user_id=? ORDER BY saved_at DESC",
+            (user_id,)
+        ).fetchall()
+    return [{"id": r["id"], "client_name": r["client_name"], "saved_at": r["saved_at"]} for r in rows]
+
+
+def get_client_session(session_id: int, user_id: int) -> dict | None:
+    import json
+    with get_db() as conn:
+        r = conn.execute(
+            "SELECT id, client_name, client_data, policies, saved_at FROM client_sessions WHERE id=? AND user_id=?",
+            (session_id, user_id)
+        ).fetchone()
+    if not r:
+        return None
+    return {
+        "id": r["id"],
+        "client_name": r["client_name"],
+        "client": json.loads(r["client_data"]),
+        "policies": json.loads(r["policies"]),
+        "saved_at": r["saved_at"],
+    }
+
+
+def delete_client_session(session_id: int, user_id: int) -> bool:
+    with get_db() as conn:
+        cur = conn.execute(
+            "DELETE FROM client_sessions WHERE id=? AND user_id=?",
+            (session_id, user_id)
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 def insert_product(company: str, product_name: str, insurance_type: str,

@@ -27,6 +27,8 @@ export default function App() {
   const [analysis, setAnalysis] = useState(null)
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [error, setError] = useState(null)
+  const [savedSessions, setSavedSessions] = useState([])
+  const [enrichedPolicies, setEnrichedPolicies] = useState(null)
 
   useEffect(() => {
     const token = localStorage.getItem('authToken')
@@ -35,10 +37,52 @@ export default function App() {
       setAuthToken(token)
       setAuthUser(JSON.parse(user))
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
+      // 登入後立刻抓歷史紀錄
+      axios.get(`${API}/client-sessions`)
+        .then(res => setSavedSessions(res.data))
+        .catch(() => {})
     }
     const savedAdvisor = localStorage.getItem('advisorInfo')
     if (savedAdvisor) setAdvisor(JSON.parse(savedAdvisor))
   }, [])
+
+  const fetchSessions = () =>
+    axios.get(`${API}/client-sessions`).then(res => setSavedSessions(res.data)).catch(() => {})
+
+  const handleLoadSession = async (sessionId) => {
+    try {
+      const res = await axios.get(`${API}/client-sessions/${sessionId}`)
+      setClient(res.data.client)
+      setPolicies(res.data.policies)
+      setEnrichedPolicies(res.data.policies)
+      setAnalysis(null)
+      setStep(2)
+    } catch {
+      alert('載入失敗')
+    }
+  }
+
+  const handleDeleteSession = async (sessionId) => {
+    if (!confirm('確定要刪除這筆紀錄？')) return
+    await axios.delete(`${API}/client-sessions/${sessionId}`)
+    fetchSessions()
+  }
+
+  const handleSaveSession = async () => {
+    const policiesToSave = enrichedPolicies || policies
+    if (!client.name || policiesToSave.length === 0) return
+    try {
+      await axios.post(`${API}/client-sessions`, {
+        client_name: client.name,
+        client: client,
+        policies: policiesToSave,
+      })
+      fetchSessions()
+      alert(`已儲存「${client.name}」的保障紀錄`)
+    } catch {
+      alert('儲存失敗')
+    }
+  }
 
   const handleLogin = (data) => {
     const user = { username: data.username, display_name: data.display_name, is_admin: data.is_admin }
@@ -48,6 +92,7 @@ export default function App() {
     setAuthToken(data.token)
     setAuthUser(user)
     if (!localStorage.getItem('advisorInfo')) setShowSetup(true)
+    axios.get(`${API}/client-sessions`).then(res => setSavedSessions(res.data)).catch(() => {})
   }
 
   const handleLogout = () => {
@@ -163,7 +208,12 @@ export default function App() {
 
       <main className="max-w-5xl mx-auto px-4 py-6">
         {step === 0 && (
-          <ClientPage client={client} setClient={setClient} onNext={() => setStep(1)} />
+          <ClientPage
+            client={client} setClient={setClient} onNext={() => setStep(1)}
+            savedSessions={savedSessions}
+            onLoadSession={handleLoadSession}
+            onDeleteSession={handleDeleteSession}
+          />
         )}
         {step === 1 && (
           <PoliciesPage
@@ -183,6 +233,8 @@ export default function App() {
             onDownload={handleDownload}
             onBack={() => setStep(1)}
             onReset={handleReset}
+            onSave={handleSaveSession}
+            onEnriched={setEnrichedPolicies}
           />
         )}
       </main>

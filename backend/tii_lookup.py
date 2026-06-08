@@ -5,6 +5,7 @@ tii_lookup.py
 
 import io
 import json
+import os
 import sqlite3
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -22,7 +23,8 @@ R2_SECRET_KEY = "de21f16d0ab5873cc0e77f548cfc06e323a51ecbb5b8d74fa9c879dfe13f83c
 R2_BUCKET     = "tii-policies"
 R2_ENDPOINT   = f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
-TII_DB_PATH = Path(__file__).parent.parent.parent / "tii_scraper.db"
+# 預設：repo 根目錄 (backend/../)；Render 上透過 TII_DB_PATH env var 指向 /data/tii_scraper.db
+TII_DB_PATH = Path(os.environ.get("TII_DB_PATH", str(Path(__file__).parent.parent / "tii_scraper.db")))
 
 # ── Step 1：查 tii_scraper.db ─────────────────────────────────────────────────
 
