@@ -11,11 +11,19 @@ export default function AdminPage({ onBack }) {
   const [loading, setLoading] = useState(false)
   const [expiryEdit, setExpiryEdit] = useState(null) // { userId, value }
   const [costs, setCosts] = useState(null)
+  const [reports, setReports] = useState([])
 
   const fetchCosts = async () => {
     try {
       const res = await axios.get(`${API}/admin/costs`)
       setCosts(res.data)
+    } catch { /* 靜默 */ }
+  }
+
+  const fetchReports = async () => {
+    try {
+      const res = await axios.get(`${API}/reports`)
+      setReports(res.data)
     } catch { /* 靜默 */ }
   }
 
@@ -28,7 +36,7 @@ export default function AdminPage({ onBack }) {
     }
   }
 
-  useEffect(() => { fetchUsers(); fetchCosts() }, [])
+  useEffect(() => { fetchUsers(); fetchCosts(); fetchReports() }, [])
 
   const handleCreate = async (e) => {
     e.preventDefault()
@@ -257,6 +265,52 @@ export default function AdminPage({ onBack }) {
             </table>
           </div>
         </div>
+        {/* 回報紀錄 */}
+        <div className="bg-white rounded-xl border shadow-sm p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold text-navy">
+              回報紀錄
+              <span className="text-sm font-normal text-gray-400 ml-2">（待確認商品）</span>
+            </h2>
+            <span className="text-sm text-gray-400">{reports.length} 筆</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-gray-400 text-xs">
+                  <th className="text-left pb-2 font-medium">時間</th>
+                  <th className="text-left pb-2 font-medium">保險公司</th>
+                  <th className="text-left pb-2 font-medium">商品名稱</th>
+                  <th className="text-left pb-2 font-medium">回報人</th>
+                  <th className="text-center pb-2 font-medium">狀態</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {reports.map(r => (
+                  <tr key={r.id} className="text-gray-600">
+                    <td className="py-2 text-xs text-gray-400 whitespace-nowrap">{r.created_at}</td>
+                    <td className="py-2 text-xs">{r.company}</td>
+                    <td className="py-2 text-xs font-medium text-navy">{r.product_name}</td>
+                    <td className="py-2 text-xs">{r.reported_by || '—'}</td>
+                    <td className="py-2 text-center">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                        r.status === 'pending'
+                          ? 'bg-yellow-100 text-yellow-700'
+                          : 'bg-green-100 text-green-700'
+                      }`}>
+                        {r.status === 'pending' ? '待確認' : '已處理'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                {reports.length === 0 && (
+                  <tr><td colSpan={5} className="py-4 text-center text-gray-300">尚無回報紀錄</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         {/* API 費用追蹤 */}
         {costs && (
           <div className="bg-white rounded-xl border shadow-sm p-6">

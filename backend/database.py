@@ -1,8 +1,35 @@
 import sqlite3
 import os
+import threading
 from difflib import SequenceMatcher
 
 DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "app.db"))
+
+R2_ACCOUNT_ID = "56279c540b6e49a298a89749be5f996b"
+R2_ACCESS_KEY = "32602fa20182a65f4388be8457df62bc"
+R2_SECRET_KEY = "de21f16d0ab5873cc0e77f548cfc06e323a51ecbb5b8d74fa9c879dfe13f83ca"
+
+
+def _sync_db_to_r2():
+    try:
+        import boto3
+        from botocore.config import Config
+        r2 = boto3.client(
+            "s3",
+            endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+            aws_access_key_id=R2_ACCESS_KEY,
+            aws_secret_access_key=R2_SECRET_KEY,
+            config=Config(signature_version="s3v4"),
+            region_name="auto",
+        )
+        r2.upload_file(DB_PATH, "tii-policies", "app.db")
+    except Exception:
+        pass
+
+
+def sync_db_to_r2():
+    """非同步備份 app.db 到 R2，不阻塞 API 回應。"""
+    threading.Thread(target=_sync_db_to_r2, daemon=True).start()
 
 
 def get_db():
@@ -188,6 +215,7 @@ def insert_report(company: str, product_name: str, reported_by: str, note: str =
                 (company, product_name, reported_by, note)
             )
             conn.commit()
+        sync_db_to_r2()
         return True
     except Exception:
         return False
@@ -203,7 +231,9 @@ def save_client_session(user_id: int, client_name: str, client_data: dict, polic
              json.dumps(policies, ensure_ascii=False))
         )
         conn.commit()
-        return cur.lastrowid
+        row_id = cur.lastrowid
+    sync_db_to_r2()
+    return row_id
 
 
 def list_client_sessions(user_id: int) -> list:
@@ -240,7 +270,10 @@ def delete_client_session(session_id: int, user_id: int) -> bool:
             (session_id, user_id)
         )
         conn.commit()
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+    if deleted:
+        sync_db_to_r2()
+    return deleted
 
 
 def insert_product(company: str, product_name: str, insurance_type: str,
@@ -254,6 +287,7 @@ def insert_product(company: str, product_name: str, insurance_type: str,
                 (company, product_name, insurance_type, premium_type, coverage_end_age, added_by)
             )
             conn.commit()
+        sync_db_to_r2()
         return True
     except Exception:
         return False
