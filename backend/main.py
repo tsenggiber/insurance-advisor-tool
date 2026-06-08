@@ -258,7 +258,8 @@ def _enrich_one_policy(p: dict) -> dict:
         elif ("實支" in name or "實支實付" in name):
             updated["medical_reimburse"] = amt
         elif "住院費用" in name and "團體" not in name:
-            # 住院費用保險附約（含擇優型）= 實支實付型，amt 為計劃日額限額
+            # 住院費用保險附約可能同時含實支實付＋住院日額
+            # Phase 1 暫以 medical_reimburse 填入，讀條款後會覆蓋為正確拆分值
             updated["medical_reimburse"] = amt
         elif "日額" in name and ("意外" in name or "傷害" in name):
             updated["accident_hosp_daily"] = amt
