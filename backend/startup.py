@@ -1,15 +1,13 @@
 """
-啟動前執行：若 /data/tii_scraper.db 不存在，從 R2 下載。
+啟動前執行：若 tii_scraper.db 不存在，從 R2 下載。
 """
 import os
 import sys
 from pathlib import Path
 
-TII_DB_PATH = os.environ.get("TII_DB_PATH", "")
-
-if not TII_DB_PATH:
-    print("[startup] TII_DB_PATH not set, skipping download")
-    sys.exit(0)
+# 與 tii_lookup.py 保持一致：repo 根目錄（backend 上兩層）
+_DEFAULT_TII_DB = str(Path(__file__).parent.parent / "tii_scraper.db")
+TII_DB_PATH = os.environ.get("TII_DB_PATH", _DEFAULT_TII_DB)
 
 if Path(TII_DB_PATH).exists():
     size = Path(TII_DB_PATH).stat().st_size
